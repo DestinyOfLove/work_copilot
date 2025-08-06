@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SCOPSR & SHBB 文章保存器
 // @namespace    http://tampermonkey.net/
-// @version      4.8-preserve-original-format
+// @version      4.9-visual-consistency
 // @description  一键保存SCOPSR和SHBB网站的文章为DOCX格式，支持多页批量保存，保留原始段落结构、标题、列表和空段落格式
 // @author       You
 // @match        https://www.scopsr.gov.cn/was5/web/search*
@@ -657,7 +657,7 @@
     // 增强版段落处理：区分标题、列表、普通段落和空段落，保留原有的段落结构和换行
     function extractContentWithFormatting(element) {
         // 通用函数：提取元素内容并保留换行
-        function extractTextWithLineBreaks(elem) {
+        function extractTextWithLineBreaks(elem, preserveVisualLayout = false) {
             // 首先处理<br>标签，将其替换为换行符
             const clonedElem = elem.cloneNode(true);
             const brElements = clonedElem.querySelectorAll('br');
@@ -668,11 +668,24 @@
             // 获取文本内容，这时<br>已经被替换为换行符
             let text = clonedElem.textContent || clonedElem.innerText || '';
             
-            // 清理多余的空白，但保留换行
-            text = text.replace(/[ \t]+/g, ' '); // 将多个空格和制表符替换为单个空格
-            text = text.replace(/\n[ \t]+/g, '\n'); // 去掉换行后的空格
-            text = text.replace(/[ \t]+\n/g, '\n'); // 去掉换行前的空格
-            text = text.replace(/\n{3,}/g, '\n\n'); // 将3个或更多换行替换为2个
+            // 如果是SHBB网站且需要保持视觉布局，特殊处理
+            if (preserveVisualLayout && currentSite.domain === 'shbb.gov.cn') {
+                // 对于SHBB网站，模拟CSS white-space: normal的效果
+                // 1. 将换行符替换为空格（除非是段落之间的换行）
+                text = text.replace(/([^\n])\n([^\n])/g, '$1 $2');
+                // 2. 合并多个空格为单个空格
+                text = text.replace(/[ \t]+/g, ' ');
+                // 3. 保留段落之间的换行（连续两个换行）
+                text = text.replace(/\n\n+/g, '\n\n');
+                // 4. 去掉行首行尾的空格
+                text = text.split('\n').map(line => line.trim()).join('\n');
+            } else {
+                // 原有的清理逻辑
+                text = text.replace(/[ \t]+/g, ' '); // 将多个空格和制表符替换为单个空格
+                text = text.replace(/\n[ \t]+/g, '\n'); // 去掉换行后的空格
+                text = text.replace(/[ \t]+\n/g, '\n'); // 去掉换行前的空格
+                text = text.replace(/\n{3,}/g, '\n\n'); // 将3个或更多换行替换为2个
+            }
             
             return text.trim();
         }
@@ -684,8 +697,9 @@
                 const processedParagraphs = [];
                 
                 paragraphs.forEach((p, index) => {
-                    // 使用新的文本提取函数，保留<br>标签产生的换行
-                    const textContent = extractTextWithLineBreaks(p);
+                    // 使用新的文本提取函数，对SHBB网站使用视觉保留模式
+                    const preserveVisual = (siteName === 'shbb.gov.cn');
+                    const textContent = extractTextWithLineBreaks(p, preserveVisual);
                     const style = p.getAttribute('style') || '';
                     
                     // 处理空段落（只包含&nbsp;或空白）
@@ -818,10 +832,10 @@
         
         if (currentSite.domain === 'shbb.gov.cn') {
             // 对于SHBB网站，直接处理段落结构
-            const result = processParagraphStructure(element, 'SHBB');
+            const result = processParagraphStructure(element, 'shbb.gov.cn');
             if (result) return result;
-            // 如果没有找到p标签，回退到带换行的文本提取
-            return extractTextWithLineBreaks(element);
+            // 如果没有找到p标签，回退到带换行的文本提取（使用视觉保留模式）
+            return extractTextWithLineBreaks(element, true);
         } else if (currentSite.domain === 'scopsr.gov.cn') {
             // 对于SCOPSR网站，需要查找嵌套的段落结构
             debugLog('SCOPSR内容提取开始，查找嵌套段落结构...');
