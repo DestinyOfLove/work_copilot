@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SCOPSR & SHBB 文章保存器
 // @namespace    http://tampermonkey.net/
-// @version      4.9-visual-consistency
+// @version      5.0-site-identification
 // @description  一键保存SCOPSR和SHBB网站的文章为DOCX格式，支持多页批量保存，保留原始段落结构、标题、列表和空段落格式
 // @author       You
 // @match        https://www.scopsr.gov.cn/was5/web/search*
@@ -1087,19 +1087,22 @@
         return maxPage;
     }
 
-    // 生成文件名（包含页码范围）
+    // 生成文件名（包含页码范围和网站标识）
     function generateFilename(searchWord, startPage, endPage, actualPages) {
         const now = new Date();
         const dateStr = now.toISOString().slice(0, 10);
         const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
-        const baseFilename = searchWord || `${currentSite.domain}文章集`;
+        
+        // 获取网站标识
+        const sitePrefix = currentSite.domain === 'scopsr.gov.cn' ? 'SCOPSR' : 'SHBB';
+        const baseFilename = searchWord || `文章集`;
 
         if (startPage === endPage || actualPages === 1) {
             // 单页
-            return `${baseFilename}_第${startPage}页_${dateStr}_${timeStr}.docx`;
+            return `${sitePrefix}_${baseFilename}_第${startPage}页_${dateStr}_${timeStr}.docx`;
         } else {
             // 多页范围
-            return `${baseFilename}_第${startPage}页到第${endPage}页_${dateStr}_${timeStr}.docx`;
+            return `${sitePrefix}_${baseFilename}_第${startPage}页到第${endPage}页_${dateStr}_${timeStr}.docx`;
         }
     }
 
@@ -1380,7 +1383,10 @@
         const wordHTML = createWordHTML([article]);
         const now = new Date();
         const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
-        const filename = `${title}_${date}_${timeStr}.docx`;
+        
+        // 获取网站标识
+        const sitePrefix = currentSite.domain === 'scopsr.gov.cn' ? 'SCOPSR' : 'SHBB';
+        const filename = `${sitePrefix}_${title}_${date}_${timeStr}.docx`;
         
         saveAsDocx(wordHTML, filename);
         
