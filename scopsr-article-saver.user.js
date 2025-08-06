@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SCOPSR文章保存器
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  一键保存SCOPSR网站的文章列表和内容（支持跨域请求）
+// @version      3.1
+// @description  一键保存SCOPSR网站的文章为DOCX格式，保留原有格式
 // @author       You
 // @match        https://www.scopsr.gov.cn/was5/web/search*
 // @match        https://www.scopsr.gov.cn/xwzx/*
@@ -45,10 +45,167 @@
     const isSearchPage = window.location.href.includes('/was5/web/search');
     const isArticlePage = window.location.href.includes('/xwzx/');
 
+    // 创建Word兼容的HTML文档
+    function createWordHTML(articles) {
+        const html = `<!DOCTYPE html>
+<html xmlns:o='urn:schemas-microsoft-com:office:office' 
+      xmlns:w='urn:schemas-microsoft-com:office:word' 
+      xmlns='http://www.w3.org/TR/REC-html40'>
+<head>
+    <meta charset='utf-8'>
+    <title>SCOPSR文章集</title>
+    <!--[if gte mso 9]>
+    <xml>
+        <w:WordDocument>
+            <w:View>Print</w:View>
+            <w:Zoom>100</w:Zoom>
+            <w:DoNotOptimizeForBrowser/>
+        </w:WordDocument>
+    </xml>
+    <![endif]-->
+    <style>
+        @page {
+            size: A4;
+            margin: 2.54cm;
+            mso-page-orientation: portrait;
+        }
+        
+        body {
+            font-family: '宋体', SimSun, serif;
+            font-size: 12pt;
+            line-height: 1.8;
+            color: #000;
+            background: white;
+        }
+        
+        h1 {
+            font-size: 22pt;
+            font-weight: bold;
+            text-align: center;
+            margin: 20pt 0;
+            color: #000;
+            mso-pagination: none;
+        }
+        
+        h2 {
+            font-size: 16pt;
+            font-weight: bold;
+            margin: 15pt 0 10pt 0;
+            color: #000;
+            page-break-before: always;
+            mso-pagination: none;
+        }
+        
+        .article-info {
+            text-align: center;
+            color: #666;
+            font-size: 10pt;
+            margin: 10pt 0;
+        }
+        
+        .article-content p {
+            text-indent: 2em;
+            margin: 10pt 0;
+            line-height: 1.8;
+            text-align: justify;
+        }
+        
+        .page-break {
+            page-break-after: always;
+            mso-special-character: line-break;
+            page-break-before: always;
+        }
+    </style>
+</head>
+<body>
+    <div class='Section1'>
+        <h1>SCOPSR文章集</h1>
+        <p style='text-align: center; color: #666;'>
+            生成日期：${new Date().toLocaleDateString('zh-CN')}
+        </p>
+        <p style='text-align: center; color: #666;'>
+            共收录 ${articles.length} 篇文章
+        </p>
+        
+        ${articles.map((article, index) => `
+            <div class='article' ${index > 0 ? "style='page-break-before: always;'" : ""}>
+                <h2>${escapeHtml(article.title)}</h2>
+                <div class='article-info'>
+                    <p>发布时间：${article.date}</p>
+                    <p>来源：${article.url}</p>
+                </div>
+                <div class='article-content'>
+                    ${formatContent(article.content)}
+                </div>
+            </div>
+        `).join('')}
+    </div>
+</body>
+</html>`;
+        
+        return html;
+    }
+
+    // HTML转义
+    function escapeHtml(text) {
+        const map = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+        };
+        return text.replace(/[&<>"']/g, m => map[m]);
+    }
+
+    // 格式化文章内容，保留段落和换行
+    function formatContent(content) {
+        if (!content || content === '获取失败' || content === '无法获取文章内容') {
+            return '<p style="color: red;">文章内容获取失败</p>';
+        }
+        
+        // 按换行分割，每行作为一个段落
+        const lines = content.split('\n').filter(line => line.trim());
+        
+        return lines.map(line => {
+            const escapedLine = escapeHtml(line.trim());
+            // 如果是空行或只有空格，返回空段落
+            if (!escapedLine) {
+                return '<p>&nbsp;</p>';
+            }
+            return `<p>${escapedLine}</p>`;
+        }).join('\n');
+    }
+
+    // 保存为DOCX文件（实际是HTML，但Word可以打开）
+    function saveAsDocx(html, filename) {
+        const blob = new Blob(['\ufeff', html], {
+            type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        });
+        
+        const url = URL.createObjectURL(blob);
+        GM_download({
+            url: url,
+            name: filename,
+            onload: () => {
+                URL.revokeObjectURL(url);
+            },
+            onerror: (error) => {
+                console.error('下载失败:', error);
+                // 备用下载方式
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+        });
+    }
+
     if (isSearchPage) {
         // 搜索结果页面：添加批量保存按钮
         const saveBtn = document.createElement('button');
-        saveBtn.textContent = '保存所有文章';
+        saveBtn.textContent = '保存为DOCX文档';
         saveBtn.className = 'save-articles-btn';
         saveBtn.onclick = saveAllArticles;
         document.body.appendChild(saveBtn);
@@ -59,7 +216,7 @@
 
             try {
                 // 获取所有文章链接
-                const articles = await collectArticleLinks();
+                const articles = collectArticleLinks();
                 
                 if (articles.length === 0) {
                     alert('未找到文章列表');
@@ -91,36 +248,20 @@
                     await new Promise(resolve => setTimeout(resolve, 500));
                 }
 
-                // 保存为JSON文件
-                const jsonData = JSON.stringify(articlesWithContent, null, 2);
-                const blob = new Blob([jsonData], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const filename = `scopsr_articles_${new Date().toISOString().slice(0, 10)}.json`;
+                // 生成Word文档
+                const wordHTML = createWordHTML(articlesWithContent);
+                const filename = `SCOPSR文章集_${new Date().toISOString().slice(0, 10)}.docx`;
                 
-                GM_download({
-                    url: url,
-                    name: filename,
-                    onload: () => {
-                        alert(`保存完成！\n总计: ${articlesWithContent.length} 篇\n成功: ${successCount} 篇\n失败: ${failCount} 篇`);
-                        URL.revokeObjectURL(url);
-                    },
-                    onerror: (error) => {
-                        console.error('下载失败:', error);
-                        // 备用下载方式
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = filename;
-                        a.click();
-                        URL.revokeObjectURL(url);
-                    }
-                });
+                saveAsDocx(wordHTML, filename);
+                
+                alert(`保存完成！\n总计: ${articlesWithContent.length} 篇\n成功: ${successCount} 篇\n失败: ${failCount} 篇`);
 
             } catch (error) {
                 console.error('保存文章时出错:', error);
                 alert('保存失败，请查看控制台错误信息');
             } finally {
                 saveBtn.disabled = false;
-                saveBtn.textContent = '保存所有文章';
+                saveBtn.textContent = '保存为DOCX文档';
             }
         }
 
@@ -215,7 +356,7 @@
     if (isArticlePage) {
         // 文章详情页面：添加单独保存按钮
         const saveBtn = document.createElement('button');
-        saveBtn.textContent = '保存本文';
+        saveBtn.textContent = '保存为DOCX文档';
         saveBtn.className = 'save-articles-btn';
         saveBtn.onclick = saveCurrentArticle;
         document.body.appendChild(saveBtn);
@@ -271,18 +412,13 @@
                 content: content
             };
 
-            const jsonData = JSON.stringify(article, null, 2);
-            const blob = new Blob([jsonData], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const filename = `article_${date}_${new Date().getTime()}.json`;
+            // 生成单篇文章的Word文档
+            const wordHTML = createWordHTML([article]);
+            const filename = `${title}_${date}.docx`;
             
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
-            URL.revokeObjectURL(url);
+            saveAsDocx(wordHTML, filename);
             
-            alert('文章已保存！');
+            alert('文章已保存为DOCX文档！');
         }
     }
 })();
