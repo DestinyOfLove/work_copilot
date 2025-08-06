@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SCOPSR & SHBB 文章保存器
 // @namespace    http://tampermonkey.net/
-// @version      4.4-enhanced-paragraphs
-// @description  一键保存SCOPSR和SHBB网站的文章为DOCX格式，支持多页批量保存，增强段落结构识别，保留标题、列表和空段落格式
+// @version      4.8-preserve-original-format
+// @description  一键保存SCOPSR和SHBB网站的文章为DOCX格式，支持多页批量保存，保留原始段落结构、标题、列表和空段落格式
 // @author       You
 // @match        https://www.scopsr.gov.cn/was5/web/search*
 // @match        https://www.scopsr.gov.cn/xwzx/*
@@ -344,27 +344,44 @@
         
         .article-content p {
             line-height: 1.8;
-            margin: 0;
+            margin: 12pt 0;
             padding: 0;
+            font-weight: normal;
+        }
+        
+        .article-content p br {
+            mso-data-placement: same-cell;
         }
         
         .article-content p[style*="text-align: center"] {
             text-align: center;
             font-weight: bold;
-            margin: 15pt 0 10pt 0;
+            margin: 18pt 0 12pt 0;
             text-indent: 0;
+            font-size: 14pt;
         }
         
         .article-content p[style*="text-indent: 2em"] {
             text-indent: 2em;
-            margin: 10pt 0;
+            margin: 12pt 0;
             text-align: justify;
+            line-height: 1.8;
+            font-weight: normal;
+        }
+        
+        .article-content p[style*="text-indent: 0"] {
+            text-indent: 0;
+            margin: 12pt 0;
+            text-align: justify;
+            line-height: 1.8;
+            font-weight: normal;
         }
         
         .article-content p:empty,
         .article-content p[style*="&nbsp;"] {
-            margin: 5pt 0;
-            line-height: 0.5;
+            margin: 12pt 0;
+            line-height: 1;
+            height: 12pt;
         }
         
         .page-break {
@@ -424,12 +441,12 @@
         // 按双换行分割段落，保留段落结构
         const paragraphs = content.split('\n\n');
         
-        return paragraphs.map(paragraph => {
+        return paragraphs.map((paragraph, index) => {
             const trimmedParagraph = paragraph.trim();
             
             // 如果是空段落，返回空段落用于分隔
             if (!trimmedParagraph) {
-                return '<p>&nbsp;</p>';
+                return '<p style="margin: 12pt 0;">&nbsp;</p>';
             }
             
             // 处理单行内的换行（保持在同一段落内）
@@ -437,29 +454,30 @@
             const processedLines = lines.map(line => line.trim()).filter(line => line.length > 0);
             
             if (processedLines.length === 0) {
-                return '<p>&nbsp;</p>';
+                return '<p style="margin: 12pt 0;">&nbsp;</p>';
             }
             
-            // 检测是否为标题（通常较短且可能居中）
-            const isHeading = processedLines.length === 1 && 
-                             processedLines[0].length < 50 && 
-                             !processedLines[0].match(/^\d+\s*[\.、]/) && 
-                             (processedLines[0].includes('改革') || 
-                              processedLines[0].includes('措施') || 
-                              processedLines[0].includes('内容') ||
-                              processedLines[0].match(/^[一二三四五六七八九十\d]+[\.、]/));
+            const firstLine = processedLines[0];
             
-            // 检测是否为列表项
-            const isListItem = processedLines[0].match(/^\d+\s*[\.、]\s*/);
+            // NOTE: Heading detection is now handled in extractContentWithFormatting
+            // This function now only processes pre-formatted structured content
             
-            const escapedContent = processedLines.map(line => escapeHtml(line)).join(' ');
+            // 检测是否为列表项（数字编号或括号编号）
+            const isListItem = /^\d+\s*[\.、]\s*/.test(firstLine) || 
+                              /^（[一二三四五六七八九十\d]+）/.test(firstLine) ||
+                              /^[一二三四五六七八九十]+[\.、]\s*/.test(firstLine);
             
-            if (isHeading) {
-                return `<p style="text-align: center; font-weight: bold; margin: 15pt 0;">${escapedContent}</p>`;
-            } else if (isListItem) {
-                return `<p style="text-indent: 2em; margin: 10pt 0;">${escapedContent}</p>`;
+            // 如果段落内有多行，使用<br>标签连接
+            const escapedContent = processedLines.length > 1 
+                ? processedLines.map(line => escapeHtml(line)).join('<br/>') 
+                : escapeHtml(firstLine);
+            
+            // 应用样式（标题检测已在HTML层面完成）
+            if (isListItem) {
+                return `<p style="margin: 12pt 0; text-indent: 0; text-align: justify; font-weight: normal;">${escapedContent}</p>`;
             } else {
-                return `<p style="text-indent: 2em; margin: 10pt 0; text-align: justify;">${escapedContent}</p>`;
+                // 普通段落，确保有明确的段落间距且不加粗
+                return `<p style="margin: 12pt 0; text-indent: 2em; text-align: justify; line-height: 1.8; font-weight: normal;">${escapedContent}</p>`;
             }
         }).join('\n');
     }
@@ -636,16 +654,38 @@
     }
 
     // 提取内容并保留格式
-    // 增强版段落处理：区分标题、列表、普通段落和空段落，保留原有的段落结构
+    // 增强版段落处理：区分标题、列表、普通段落和空段落，保留原有的段落结构和换行
     function extractContentWithFormatting(element) {
-        if (currentSite.domain === 'shbb.gov.cn') {
-            // 对于SHBB网站，提取段落结构并保留格式
-            const paragraphs = element.querySelectorAll('p');
+        // 通用函数：提取元素内容并保留换行
+        function extractTextWithLineBreaks(elem) {
+            // 首先处理<br>标签，将其替换为换行符
+            const clonedElem = elem.cloneNode(true);
+            const brElements = clonedElem.querySelectorAll('br');
+            brElements.forEach(br => {
+                br.replaceWith('\n');
+            });
+            
+            // 获取文本内容，这时<br>已经被替换为换行符
+            let text = clonedElem.textContent || clonedElem.innerText || '';
+            
+            // 清理多余的空白，但保留换行
+            text = text.replace(/[ \t]+/g, ' '); // 将多个空格和制表符替换为单个空格
+            text = text.replace(/\n[ \t]+/g, '\n'); // 去掉换行后的空格
+            text = text.replace(/[ \t]+\n/g, '\n'); // 去掉换行前的空格
+            text = text.replace(/\n{3,}/g, '\n\n'); // 将3个或更多换行替换为2个
+            
+            return text.trim();
+        }
+        
+        // 通用段落处理函数（适用于SHBB和SCOPSR）
+        function processParagraphStructure(containerElement, siteName) {
+            const paragraphs = containerElement.querySelectorAll('p');
             if (paragraphs.length > 0) {
                 const processedParagraphs = [];
                 
                 paragraphs.forEach((p, index) => {
-                    const textContent = p.textContent.trim();
+                    // 使用新的文本提取函数，保留<br>标签产生的换行
+                    const textContent = extractTextWithLineBreaks(p);
                     const style = p.getAttribute('style') || '';
                     
                     // 处理空段落（只包含&nbsp;或空白）
@@ -655,8 +695,58 @@
                         return;
                     }
                     
-                    // 检测是否为标题段落（居中对齐）
-                    const isHeading = style.includes('text-align:center') || style.includes('text-align: center');
+                    // 检测是否为标题段落 - 基于HTML结构和CSS样式，而不是文本内容
+                    let isHeading = false;
+                    
+                    // 检查HTML标签是否为标题标签
+                    if (p.tagName && /^H[1-6]$/.test(p.tagName)) {
+                        isHeading = true;
+                        debugLog(`检测到HTML标题标签 ${p.tagName}:`, textContent.substring(0, 50));
+                    }
+                    
+                    if (!isHeading && siteName === 'SHBB') {
+                        // 对于SHBB，检查font-family是否为黑体（标题字体）
+                        let hasHeadingFont = false;
+                        
+                        // 检查直接style属性
+                        if (style.includes('font-family')) {
+                            const fontMatch = style.match(/font-family\s*:\s*([^;]+)/);
+                            if (fontMatch && fontMatch[1].includes('黑体')) {
+                                hasHeadingFont = true;
+                            }
+                        }
+                        
+                        // 检查内部span元素的font-family
+                        if (!hasHeadingFont) {
+                            const spans = p.querySelectorAll('span');
+                            for (const span of spans) {
+                                const spanStyle = span.getAttribute('style') || '';
+                                if (spanStyle.includes('font-family')) {
+                                    const spanFontMatch = spanStyle.match(/font-family\s*:\s*([^;]+)/);
+                                    if (spanFontMatch && spanFontMatch[1].includes('黑体')) {
+                                        hasHeadingFont = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // 检查是否居中对齐
+                        const isCentered = style.includes('text-align:center') || style.includes('text-align: center');
+                        
+                        // SHBB标题标准：黑体字体或居中对齐
+                        if (hasHeadingFont || isCentered) {
+                            isHeading = true;
+                            debugLog(`SHBB检测到标题段落 (黑体:${hasHeadingFont}, 居中:${isCentered}):`, textContent.substring(0, 50));
+                        }
+                    } else if (!isHeading && siteName === 'SCOPSR') {
+                        // 对于SCOPSR，检查是否居中对齐
+                        const isCentered = style.includes('text-align:center') || style.includes('text-align: center');
+                        if (isCentered) {
+                            isHeading = true;
+                            debugLog(`SCOPSR检测到居中标题段落:`, textContent.substring(0, 50));
+                        }
+                    }
                     
                     // 检测是否为有缩进的段落
                     const hasIndent = style.includes('text-indent') && !style.includes('text-indent:0');
@@ -668,49 +758,99 @@
                         fontFamily = fontMatch[1].trim();
                     }
                     
-                    // 检测是否为列表项（数字开头）
-                    const isListItem = /^\d+\s*[\.、]\s*/.test(textContent);
+                    // 检测是否为列表项（数字开头或（一）、（二）等格式）
+                    const isListItem = /^\d+\s*[\.、]\s*/.test(textContent) || /^（[一二三四五六七八九十\d]+）/.test(textContent);
                     
+                    // 对于SCOPSR，检测中文全角空格开头的段落（通常是正文段落）
+                    const hasChineseIndent = textContent.startsWith('　　');
+                    
+                    // 直接处理每个段落，保持原有结构，不进行任何自动拆分
                     processedParagraphs.push({
                         type: isHeading ? 'heading' : isListItem ? 'list' : 'paragraph',
                         content: textContent,
-                        hasIndent: hasIndent,
+                        hasIndent: hasIndent || hasChineseIndent,
                         fontFamily: fontFamily,
                         originalStyle: style
                     });
                 });
                 
-                // 构建结构化的文本内容
+                // 构建结构化的文本内容 - 确保每个段落都有明确的分隔
                 const structuredContent = processedParagraphs.map((para, index) => {
                     switch (para.type) {
                         case 'empty':
-                            return ''; // 空行用于段落分隔
+                            return ''; // 空段落
                         case 'heading':
-                            return `\n${para.content}\n`; // 标题前后各加一个换行
+                            return para.content; // 标题段落
                         case 'list':
-                            return para.content; // 列表项保持原样
+                            return para.content; // 列表项段落
                         case 'paragraph':
                         default:
-                            return para.content;
+                            return para.content; // 普通段落
                     }
-                }).join('\n\n'); // 段落之间用双换行分隔
+                }).filter(content => content !== ''); // 移除空字符串但保留实际的空段落
                 
-                debugLog(`SHBB段落提取结果: ${structuredContent.length}个字符, ${paragraphs.length}个段落`);
+                // 使用双换行符分隔所有段落，确保Word中有明确的段落分隔
+                const finalContent = structuredContent.join('\n\n');
+                
+                debugLog(`${siteName}段落提取结果: ${finalContent.length}个字符, ${paragraphs.length}个原始段落, ${structuredContent.length}个处理后段落`);
                 debugLog('段落结构分析:', {
                     '总段落数': processedParagraphs.length,
                     '标题段落': processedParagraphs.filter(p => p.type === 'heading').length,
                     '列表段落': processedParagraphs.filter(p => p.type === 'list').length,
                     '普通段落': processedParagraphs.filter(p => p.type === 'paragraph').length,
-                    '空段落': processedParagraphs.filter(p => p.type === 'empty').length
+                    '空段落': processedParagraphs.filter(p => p.type === 'empty').length,
+                    '最终段落数': structuredContent.length
                 });
                 
-                return structuredContent;
+                // 输出前几个段落的内容用于调试
+                if (structuredContent.length > 0) {
+                    debugLog('前3个段落预览:', {
+                        '段落1': structuredContent[0]?.substring(0, 100) + '...',
+                        '段落2': structuredContent[1]?.substring(0, 100) + '...',
+                        '段落3': structuredContent[2]?.substring(0, 100) + '...'
+                    });
+                }
+                
+                return finalContent;
             }
-            // 如果没有找到p标签，回退到普通文本提取
-            return element.textContent.trim();
+            return null;
+        }
+        
+        if (currentSite.domain === 'shbb.gov.cn') {
+            // 对于SHBB网站，直接处理段落结构
+            const result = processParagraphStructure(element, 'SHBB');
+            if (result) return result;
+            // 如果没有找到p标签，回退到带换行的文本提取
+            return extractTextWithLineBreaks(element);
+        } else if (currentSite.domain === 'scopsr.gov.cn') {
+            // 对于SCOPSR网站，需要查找嵌套的段落结构
+            debugLog('SCOPSR内容提取开始，查找嵌套段落结构...');
+            
+            // 首先尝试在.TRS_Editor或.Custom_UnionStyle中查找段落
+            let paragraphContainer = element.querySelector('.TRS_Editor .Custom_UnionStyle');
+            if (!paragraphContainer) {
+                paragraphContainer = element.querySelector('.TRS_Editor');
+            }
+            if (!paragraphContainer) {
+                paragraphContainer = element.querySelector('.Custom_UnionStyle');
+            }
+            
+            if (paragraphContainer) {
+                debugLog('找到SCOPSR段落容器:', paragraphContainer.className || 'no class');
+                const result = processParagraphStructure(paragraphContainer, 'SCOPSR');
+                if (result) return result;
+            } else {
+                debugLog('未找到SCOPSR段落容器，尝试直接在主元素中查找段落');
+                const result = processParagraphStructure(element, 'SCOPSR');
+                if (result) return result;
+            }
+            
+            // 如果没有找到p标签，回退到带换行的文本提取
+            debugLog('SCOPSR回退到通用文本提取');
+            return extractTextWithLineBreaks(element);
         } else {
-            // 对于SCOPSR网站，使用原有的文本提取方式
-            return element.textContent.trim();
+            // 其他网站使用通用处理
+            return extractTextWithLineBreaks(element);
         }
     }
 
