@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SCOPSR文章保存器
 // @namespace    http://tampermonkey.net/
-// @version      3.1
+// @version      3.2
 // @description  一键保存SCOPSR网站的文章为DOCX格式，保留原有格式
 // @author       You
 // @match        https://www.scopsr.gov.cn/was5/web/search*
@@ -250,7 +250,11 @@
 
                 // 生成Word文档
                 const wordHTML = createWordHTML(articlesWithContent);
-                const filename = `SCOPSR文章集_${new Date().toISOString().slice(0, 10)}.docx`;
+                // 文件名包含日期和时间（精确到秒）
+                const now = new Date();
+                const dateStr = now.toISOString().slice(0, 10);
+                const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
+                const filename = `SCOPSR文章集_${dateStr}_${timeStr}.docx`;
                 
                 saveAsDocx(wordHTML, filename);
                 
@@ -270,17 +274,25 @@
             
             // 获取搜索结果容器中的所有文章
             const container = document.querySelector('#searchresult, .jiansuo-container-result');
-            if (!container) return articles;
+            if (!container) {
+                console.log('未找到搜索结果容器');
+                return articles;
+            }
             
             // 每个ul包含一篇文章
             const articleElements = container.querySelectorAll('ul');
+            console.log(`找到 ${articleElements.length} 个ul元素`);
             
-            articleElements.forEach(ul => {
+            articleElements.forEach((ul, index) => {
                 // 获取标题和链接
                 const titleLink = ul.querySelector('li h2 a');
-                if (!titleLink) return;
+                if (!titleLink) {
+                    console.log(`第 ${index + 1} 个ul没有找到标题链接`);
+                    return;
+                }
                 
-                const title = titleLink.textContent.trim();
+                // 清理标题，移除HTML标签
+                const title = titleLink.textContent.replace(/<[^>]*>/g, '').trim();
                 const url = titleLink.href;
                 
                 // 获取日期
@@ -289,18 +301,21 @@
                 
                 // 获取摘要
                 const summary = ul.querySelector('li p');
-                const summaryText = summary ? summary.textContent.trim() : '';
+                const summaryText = summary ? summary.innerHTML.replace(/<[^>]*>/g, '').trim() : '';
                 
-                if (url && url.includes('/xwzx/')) {
+                // 不再限制URL必须包含/xwzx/，因为有些文章可能在其他栏目
+                if (url && titleLink.href) {
                     articles.push({
                         title: title,
                         url: url,
                         date: date,
                         summary: summaryText
                     });
+                    console.log(`收集第 ${articles.length} 篇文章: ${title}`);
                 }
             });
 
+            console.log(`总共收集到 ${articles.length} 篇文章`);
             return articles;
         }
 
@@ -414,7 +429,10 @@
 
             // 生成单篇文章的Word文档
             const wordHTML = createWordHTML([article]);
-            const filename = `${title}_${date}.docx`;
+            // 文件名包含日期和时间（精确到秒）
+            const now = new Date();
+            const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
+            const filename = `${title}_${date}_${timeStr}.docx`;
             
             saveAsDocx(wordHTML, filename);
             
