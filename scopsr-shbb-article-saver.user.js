@@ -1419,10 +1419,81 @@
         }
     }
 
-    // 页面加载完成后添加按钮
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', addButtons);
-    } else {
-        addButtons();
+    // 跨平台兼容的按钮加载逻辑
+    function addButtonsWithRetry() {
+        let retryCount = 0;
+        const maxRetries = 5;
+        const retryInterval = 800;
+        
+        function attemptAddButtons() {
+            retryCount++;
+            debugLog(`第${retryCount}次尝试添加按钮...`);
+            
+            // 确保DOM完全准备就绪
+            if (document.readyState !== 'complete' && retryCount < maxRetries) {
+                debugLog('DOM未完全加载，延迟重试');
+                setTimeout(attemptAddButtons, retryInterval);
+                return;
+            }
+            
+            // 确保body元素存在
+            if (!document.body) {
+                debugLog('document.body不存在，延迟重试');
+                if (retryCount < maxRetries) {
+                    setTimeout(attemptAddButtons, retryInterval);
+                }
+                return;
+            }
+            
+            // 检查是否已存在按钮（避免重复创建）
+            const existingButton = document.querySelector('.save-articles-btn');
+            if (existingButton) {
+                debugLog('按钮已存在，跳过创建');
+                return;
+            }
+            
+            try {
+                // 执行原有的按钮添加逻辑
+                addButtons();
+                
+                // 验证按钮是否创建成功
+                setTimeout(() => {
+                    const createdButton = document.querySelector('.save-articles-btn');
+                    if (!createdButton && retryCount < maxRetries) {
+                        debugLog(`按钮创建验证失败，准备第${retryCount + 1}次重试`);
+                        setTimeout(attemptAddButtons, retryInterval);
+                    } else if (createdButton) {
+                        debugLog('按钮创建并验证成功');
+                    } else {
+                        debugLog('已达到最大重试次数，按钮创建失败');
+                    }
+                }, 200);
+                
+            } catch (error) {
+                debugLog('创建按钮时出错:', error.message);
+                if (retryCount < maxRetries) {
+                    setTimeout(attemptAddButtons, retryInterval);
+                }
+            }
+        }
+        
+        // 立即尝试一次
+        attemptAddButtons();
+        
+        // 额外的保险机制：页面完全加载后再试一次
+        if (document.readyState !== 'complete') {
+            window.addEventListener('load', () => {
+                setTimeout(() => {
+                    const button = document.querySelector('.save-articles-btn');
+                    if (!button) {
+                        debugLog('页面load事件触发后补充尝试');
+                        attemptAddButtons();
+                    }
+                }, 1000);
+            });
+        }
     }
+    
+    // 使用新的重试机制
+    addButtonsWithRetry();
 })();
